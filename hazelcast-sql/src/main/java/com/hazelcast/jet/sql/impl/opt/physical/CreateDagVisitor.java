@@ -68,7 +68,6 @@ import java.util.function.Predicate;
 import static com.hazelcast.function.Functions.entryKey;
 import static com.hazelcast.jet.core.Edge.between;
 import static com.hazelcast.jet.core.Edge.from;
-import static com.hazelcast.jet.core.ProcessorMetaSupplier.forceTotalParallelismOne;
 import static com.hazelcast.jet.core.processor.Processors.filterUsingServiceP;
 import static com.hazelcast.jet.core.processor.Processors.mapP;
 import static com.hazelcast.jet.core.processor.Processors.mapUsingServiceP;
@@ -403,7 +402,18 @@ public class CreateDagVisitor {
     public Vertex onHashJoin(JoinHashPhysicalRel rel) {
         JetJoinInfo joinInfo = rel.joinInfo(parameterMetadata);
 
-        if (!rel.isStreaming()) {
+        if (rel.isStreaming()) {
+            Vertex rightInputVertex = ((PhysicalRel) rel.getRight()).accept(this);
+            Vertex splitVertex = dag.newUniqueVertex("join-split", HashJoinStreamProcessor.splitSupplier(
+                    joinInfo, rel.getRight().getRowType().getFieldCount()));
+            Vertex joinVertex = dag.newUniqueVertex("join-finish", HashJoinStreamProcessor.joinSupplier(
+                    joinInfo));
+            connectInput(rel.getLeft(), splitVertex, e -> e.distributeTo(localMemberAddress).allToOne(""));
+            dag.edge(from(splitVertex, 0).to(joinVertex));
+            dag.edge(from(splitVertex, 1).to(rightInputVertex));
+            dag.edge(from(rightInputVertex).to(joinVertex, 1));
+            return joinVertex;
+        } else {
             Vertex joinVertex = dag.newUniqueVertex(
                     "Hash Join",
                     SqlHashJoinP.supplier(
@@ -412,24 +422,7 @@ public class CreateDagVisitor {
                     ));
             connectJoinInput(joinInfo, rel.getLeft(), rel.getRight(), joinVertex);
             return joinVertex;
-        } else {
-            CreateDagVisitor visitor = new CreateDagVisitor(this.nodeEngine, parameterMetadata);
-            visitor.onRoot(new RootRel(rel.getRight()));
-            Vertex joinVertex = dag.newUniqueVertex(
-                    "Hash Join (Streaming)",
-                    forceTotalParallelismOne(
-                            HashJoinStreamProcessor.supplier(
-                                    joinInfo,
-                                    rel.getRight().getRowType().getFieldCount(),
-                                    visitor.getDag()),
-                            localMemberAddress
-                    )
-            );
-            connectInput(rel.getLeft(), joinVertex, e -> e.distributeTo(localMemberAddress).allToOne(""));
-            return joinVertex;
         }
-
-
     }
 
     public Vertex onUnion(UnionPhysicalRel rel) {

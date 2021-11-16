@@ -92,6 +92,7 @@ public class SqlHashJoinP extends AbstractProcessor {
 
     @Override
     protected boolean tryProcess1(@Nonnull Object item) {
+        // TODO [viliam] one hashmap entry contains multiple items
         if (hashMap.size() == maxItemsInHashTable) {
             throw new AccumulationLimitExceededException();
         }

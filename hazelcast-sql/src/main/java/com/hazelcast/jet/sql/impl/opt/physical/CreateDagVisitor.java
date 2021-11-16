@@ -42,9 +42,8 @@ import com.hazelcast.jet.sql.impl.connector.SqlConnector.VertexWithInputConfig;
 import com.hazelcast.jet.sql.impl.connector.SqlConnectorUtil;
 import com.hazelcast.jet.sql.impl.connector.map.IMapSqlConnector;
 import com.hazelcast.jet.sql.impl.opt.ExpressionValues;
-import com.hazelcast.jet.sql.impl.processors.HashJoinProcessor;
-import com.hazelcast.jet.sql.impl.processors.HashJoinStreamProcessor;
 import com.hazelcast.jet.sql.impl.opt.metadata.WindowProperties;
+import com.hazelcast.jet.sql.impl.processors.HashJoinStreamProcessor;
 import com.hazelcast.jet.sql.impl.processors.SqlHashJoinP;
 import com.hazelcast.jet.sql.impl.schema.HazelcastTable;
 import com.hazelcast.spi.impl.NodeEngine;
@@ -407,7 +406,7 @@ public class CreateDagVisitor {
         if (!rel.isStreaming()) {
             Vertex joinVertex = dag.newUniqueVertex(
                     "Hash Join",
-                    HashJoinProcessor.supplier(
+                    SqlHashJoinP.supplier(
                             joinInfo,
                             rel.getRight().getRowType().getFieldCount()
                     ));

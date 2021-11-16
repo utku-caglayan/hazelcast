@@ -53,6 +53,15 @@ public class TestStreamSqlConnector extends TestAbstractSqlConnector {
 
     public static void create(
             SqlService sqlService,
+            String tableName
+    ) {
+        String sql = "CREATE MAPPING " + tableName + " TYPE " + TYPE_NAME + "";
+        System.out.println(sql);
+        sqlService.execute(sql).updateCount();
+    }
+
+    public static void create(
+            SqlService sqlService,
             String tableName,
             List<String> names,
             List<QueryDataTypeFamily> types,

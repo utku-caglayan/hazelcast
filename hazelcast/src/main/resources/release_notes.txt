@@ -8,9 +8,9 @@ brackets refer to the issues in Hazelcast's GitHub repository.
 
 * **Tiered Storage (BETA)**: Introduced the Tiered Storage feature which is an extension to Hazelcast Map
 assigning data to various types of storage media based on access patterns. It is a Hazelcast Enterprise feature
-and in BETA state. See the Tiered Storage section.
+and in BETA state. See the Tiered Storage documentation.
 * **Persistence for Dynamic Configuration:** You can now reload the updates made in the dynamic configuration
-after a cluster restart. See the Persisting Changes in Dynamic Configuration section.
+after a cluster restart. See the documentation for Persisting Changes in Dynamic Configuration section.
 
 ## Enhancements
 
@@ -62,12 +62,6 @@ Management Center can't access the data if at least one member has the data acce
 This allows you to disable the console feature on Management Center as it supports lots of operations and it's not subject
 to the regular access restrictions; it can read from/write to any data structure even if Management Center is restricted
 to access those via client permissions. [#19718]
-
-### Tiered Storage
-
-* Introduced the hybrid log allocator;  hybrid log is used for allocating slots for the
-records stored in the log and for moving these slots between multiple devices,
-such as the main memory, disks, Optane, remote devices, etc. #4430
 
 ### Other Enhancements
 

@@ -32,7 +32,6 @@ import com.hazelcast.jet.sql.impl.ExpressionUtil;
 import com.hazelcast.jet.sql.impl.JetJoinInfo;
 import com.hazelcast.jet.sql.impl.ObjectArrayKey;
 import com.hazelcast.jet.sql.impl.QueryResultProducerImpl;
-import com.hazelcast.jet.sql.impl.SimpleExpressionEvalContext;
 import com.hazelcast.nio.ObjectDataInput;
 import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.nio.serialization.DataSerializable;
@@ -52,9 +51,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
-import static com.hazelcast.jet.impl.util.Util.extendArray;
 import static com.hazelcast.jet.impl.util.Util.getNodeEngine;
-import static com.hazelcast.jet.sql.impl.SimpleExpressionEvalContext.SQL_ARGUMENTS_KEY_NAME;
+import static com.hazelcast.sql.impl.expression.ExpressionEvalContext.SQL_ARGUMENTS_KEY_NAME;
 
 public class HashJoinStreamProcessor extends AbstractProcessor {
     private static final int TIMEOUT = 200000;
@@ -64,8 +62,8 @@ public class HashJoinStreamProcessor extends AbstractProcessor {
     private final DAG subDag;
 
     private ExpressionEvalContext evalContext;
-    private Multimap<ObjectArrayKey, Object[]> hashMap;
-    private FlatMapper<Object[], Object[]> flatMapper;
+    private Multimap<ObjectArrayKey, JetSqlRow> hashMap;
+    private FlatMapper<JetSqlRow, JetSqlRow> flatMapper;
     private JetService jet;
     private QueryResultRegistry queryResultRegistry;
 
@@ -81,7 +79,7 @@ public class HashJoinStreamProcessor extends AbstractProcessor {
 
     @Override
     public void init(@Nonnull Context context) throws Exception {
-        this.evalContext = SimpleExpressionEvalContext.from(context);
+        this.evalContext = ExpressionEvalContext.from(context);
         this.hashMap = LinkedListMultimap.create();
         this.flatMapper = flatMapper(this::join);
         this.jet = context.hazelcastInstance().getJet();
@@ -91,10 +89,10 @@ public class HashJoinStreamProcessor extends AbstractProcessor {
                 .getResultRegistry();
     }
 
-    private Traverser<Object[]> join(Object[] leftRow) {
+    private Traverser<JetSqlRow> join(JetSqlRow leftRow) {
         ObjectArrayKey joinKeys = ObjectArrayKey.project(leftRow, joinInfo.leftEquiJoinIndices());
-        Collection<Object[]> matchedRows = hashMap.get(joinKeys);
-        List<Object[]> output = matchedRows.stream()
+        Collection<JetSqlRow> matchedRows = hashMap.get(joinKeys);
+        List<JetSqlRow> output = matchedRows.stream()
                 .map(right -> ExpressionUtil.join(
                         leftRow,
                         right,
@@ -104,7 +102,7 @@ public class HashJoinStreamProcessor extends AbstractProcessor {
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
         if (joinInfo.isLeftOuter() && output.isEmpty()) {
-            return Traversers.singleton(extendArray(leftRow, rightInputColumnCount));
+            return Traversers.singleton(leftRow.extendedRow(rightInputColumnCount));
         }
         return Traversers.traverseIterable(output);
     }
@@ -140,24 +138,24 @@ public class HashJoinStreamProcessor extends AbstractProcessor {
         ResultIterator<Row> rightResult = executeDag();
         rightResult.forEachRemaining(row -> {
             int rightLen = row.getColumnCount();
-            Object[] rightRow = rowToArray(row, rightLen);
+            JetSqlRow rightRow = rowToJetRow(row, rightLen);
             ObjectArrayKey joinKeys = ObjectArrayKey.project(rightRow, joinInfo.rightEquiJoinIndices());
             hashMap.put(joinKeys, rightRow);
         });
         super.process(ordinal, inbox);
     }
 
-    private static Object[] rowToArray(Row row, int len) {
+    private JetSqlRow rowToJetRow(Row row, int len) {
         Object[] result = new Object[len];
         for (int i = 0; i < len; i++) {
             result[i] = row.get(i);
         }
-        return result;
+        return new JetSqlRow(evalContext.getSerializationService(), result);
     }
 
     @Override
     protected boolean tryProcess0(@Nonnull Object item) {
-        return flatMapper.tryProcess((Object[]) item);
+        return flatMapper.tryProcess((JetSqlRow) item);
     }
 
     @Override

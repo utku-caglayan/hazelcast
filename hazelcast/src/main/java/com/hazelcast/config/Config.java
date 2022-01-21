@@ -60,6 +60,7 @@ import com.hazelcast.spi.annotation.PrivateApi;
 import com.hazelcast.topic.ITopic;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -67,6 +68,7 @@ import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.io.SequenceInputStream;
 import java.net.URL;
+import java.util.Collections;
 import java.util.EventListener;
 import java.util.LinkedList;
 import java.util.List;
@@ -76,6 +78,7 @@ import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import static com.hazelcast.config.LocalDeviceConfig.DEFAULT_DEVICE_NAME;
 import static com.hazelcast.internal.config.ConfigUtils.lookupByPattern;
 import static com.hazelcast.internal.config.DeclarativeConfigUtil.SYSPROP_MEMBER_CONFIG;
 import static com.hazelcast.internal.config.DeclarativeConfigUtil.validateSuffixInSystemProperty;
@@ -154,6 +157,10 @@ public class Config {
 
     private final Map<String, PNCounterConfig> pnCounterConfigs = new ConcurrentHashMap<>();
 
+    private final Map<String, DeviceConfig> deviceConfigs = new ConcurrentHashMap<>(
+            Collections.singletonMap(DEFAULT_DEVICE_NAME, new LocalDeviceConfig())
+    );
+
     // @since 3.12
     private AdvancedNetworkConfig advancedNetworkConfig = new AdvancedNetworkConfig();
 
@@ -201,6 +208,8 @@ public class Config {
 
     private JetConfig jetConfig = new JetConfig();
 
+    private DynamicConfigurationConfig dynamicConfigurationConfig = new DynamicConfigurationConfig();
+
     public Config() {
     }
 
@@ -228,7 +237,22 @@ public class Config {
         cfg = new ExternalConfigurationOverride().overwriteMemberConfig(cfg);
         PersistenceAndHotRestartPersistenceMerger
                 .merge(cfg.getHotRestartPersistenceConfig(), cfg.getPersistenceConfig());
+        setConfigurationFileFromUrl(cfg);
         return cfg;
+    }
+
+    // configurationFile must be set correctly because dynamic
+    // configuration persistence depends on this field. If this is
+    // absent, hazelcast instance may fail to find a file to persist.
+    private static void setConfigurationFileFromUrl(Config cfg) {
+        if (cfg.getConfigurationFile() == null && cfg.getConfigurationUrl() != null) {
+            File configFile = new File(cfg.getConfigurationUrl().getPath());
+
+            // Only set configurationFile if the config actually exist on the filesystem.
+            if (configFile.exists()) {
+                cfg.setConfigurationFile(configFile);
+            }
+        }
     }
 
     private static Config loadFromFile(Properties properties) {
@@ -2633,6 +2657,49 @@ public class Config {
         return this;
     }
 
+    /**
+     * Returns the map of {@link LocalDeviceConfig}s mapped by device name.
+     *
+     * @return the device configurations mapped by device name
+     */
+    public Map<String, DeviceConfig> getDeviceConfigs() {
+        return deviceConfigs;
+    }
+
+    /**
+     * Sets the map of {@link DeviceConfig}s mapped by device name.
+     *
+     * @param deviceConfigs device configuration map
+     * @return this config instance
+     */
+    public Config setDeviceConfigs(Map<String, DeviceConfig> deviceConfigs) {
+        this.deviceConfigs.clear();
+        this.deviceConfigs.putAll(deviceConfigs);
+        return this;
+    }
+
+    /**
+     * Returns the device config mapped by the provided device name.
+     *
+     * @param name the device name
+     * @return device config or {@code null} if absent
+     */
+    @Nullable
+    public <T extends DeviceConfig> T getDeviceConfig(String name) {
+        return (T) deviceConfigs.get(name);
+    }
+
+    /**
+     * Adds the device configuration.
+     *
+     * @param deviceConfig device config
+     * @return this config instance
+     */
+    public Config addDeviceConfig(DeviceConfig deviceConfig) {
+        deviceConfigs.put(deviceConfig.getName(), deviceConfig);
+        return this;
+    }
+
     public CRDTReplicationConfig getCRDTReplicationConfig() {
         return crdtReplicationConfig;
     }
@@ -2961,6 +3028,21 @@ public class Config {
     }
 
     /**
+     * Returns the dynamic configuration config.
+     */
+    public DynamicConfigurationConfig getDynamicConfigurationConfig() {
+        return dynamicConfigurationConfig;
+    }
+
+    /**
+     * Sets the dynamic configuration config.
+     */
+    public Config setDynamicConfigurationConfig(DynamicConfigurationConfig dynamicConfigurationConfig) {
+        this.dynamicConfigurationConfig = dynamicConfigurationConfig;
+        return this;
+    }
+
+    /**
      * Returns the configuration for the user services managed by this
      * hazelcast instance.
      *
@@ -3021,6 +3103,7 @@ public class Config {
                 + ", metricsConfig=" + metricsConfig
                 + ", auditlogConfig=" + auditlogConfig
                 + ", jetConfig=" + jetConfig
+                + ", deviceConfigs=" + deviceConfigs
                 + '}';
     }
 }

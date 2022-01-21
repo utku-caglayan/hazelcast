@@ -91,7 +91,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
         "checkstyle:MethodCount",
 })
 @Command(
-        name = "hazelcast",
+        name = "hz-cli",
         description = "Utility to perform operations on a Hazelcast cluster.%n"
                 + "By default it uses the file config/hazelcast-client.xml to configure the client connection."
                 + "%n%n"
@@ -635,7 +635,7 @@ public class HazelcastCommandLine implements Runnable {
     public static class Verbosity {
 
         @Option(names = {"-v", "--verbosity"},
-                description = {"Show logs from Jet client and full stack trace of errors"},
+                description = {"Show verbose logs and full stack trace of errors"},
                 order = 1
         )
         private boolean isVerbose;

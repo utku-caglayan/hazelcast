@@ -32,10 +32,12 @@ import com.hazelcast.jet.sql.impl.SqlPlanImpl.CreateIndexPlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.CreateJobPlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.CreateMappingPlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.CreateSnapshotPlan;
+import com.hazelcast.jet.sql.impl.SqlPlanImpl.CreateViewPlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.DmlPlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.DropJobPlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.DropMappingPlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.DropSnapshotPlan;
+import com.hazelcast.jet.sql.impl.SqlPlanImpl.DropViewPlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.ExplainStatementPlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.IMapDeletePlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.IMapInsertPlan;
@@ -45,7 +47,8 @@ import com.hazelcast.jet.sql.impl.SqlPlanImpl.IMapUpdatePlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.SelectPlan;
 import com.hazelcast.jet.sql.impl.SqlPlanImpl.ShowStatementPlan;
 import com.hazelcast.jet.sql.impl.parse.SqlShowStatement.ShowStatementTarget;
-import com.hazelcast.jet.sql.impl.schema.MappingCatalog;
+import com.hazelcast.jet.sql.impl.processors.JetSqlRow;
+import com.hazelcast.jet.sql.impl.schema.TableResolverImpl;
 import com.hazelcast.map.IMap;
 import com.hazelcast.map.impl.EntryRemovingProcessor;
 import com.hazelcast.map.impl.MapContainer;
@@ -63,11 +66,19 @@ import com.hazelcast.sql.impl.QueryId;
 import com.hazelcast.sql.impl.QueryParameterMetadata;
 import com.hazelcast.sql.impl.SqlErrorCode;
 import com.hazelcast.sql.impl.UpdateSqlResultImpl;
+import com.hazelcast.sql.impl.expression.ExpressionEvalContext;
 import com.hazelcast.sql.impl.row.EmptyRow;
 import com.hazelcast.sql.impl.row.HeapRow;
+import com.hazelcast.sql.impl.schema.view.View;
 import com.hazelcast.sql.impl.state.QueryResultRegistry;
+import com.hazelcast.sql.impl.type.QueryDataType;
+import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.type.RelDataTypeField;
+import org.apache.calcite.sql.SqlNode;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -81,21 +92,24 @@ import java.util.stream.Stream;
 
 import static com.hazelcast.config.BitmapIndexOptions.UniqueKeyTransformation;
 import static com.hazelcast.jet.impl.util.Util.getNodeEngine;
-import static com.hazelcast.jet.sql.impl.SimpleExpressionEvalContext.SQL_ARGUMENTS_KEY_NAME;
 import static com.hazelcast.jet.sql.impl.parse.SqlCreateIndex.UNIQUE_KEY;
 import static com.hazelcast.jet.sql.impl.parse.SqlCreateIndex.UNIQUE_KEY_TRANSFORMATION;
+import static com.hazelcast.jet.sql.impl.validate.types.HazelcastTypeUtils.toHazelcastType;
 import static com.hazelcast.sql.SqlColumnType.VARCHAR;
+import static com.hazelcast.sql.impl.expression.ExpressionEvalContext.SQL_ARGUMENTS_KEY_NAME;
 import static java.util.Collections.singletonList;
 
 public class PlanExecutor {
     private static final String LE = System.lineSeparator();
+    private static final String DEFAULT_UNIQUE_KEY = "__key";
+    private static final String DEFAULT_UNIQUE_KEY_TRANSFORMATION = "OBJECT";
 
-    private final MappingCatalog catalog;
+    private final TableResolverImpl catalog;
     private final HazelcastInstance hazelcastInstance;
     private final QueryResultRegistry resultRegistry;
 
     public PlanExecutor(
-            MappingCatalog catalog,
+            TableResolverImpl catalog,
             HazelcastInstance hazelcastInstance,
             QueryResultRegistry resultRegistry
     ) {
@@ -121,6 +135,7 @@ public class PlanExecutor {
             // common case. There's no atomic operation to create an index in IMDG, so it's not easy to
             // implement.
             MapContainer mapContainer = getMapContainer(hazelcastInstance.getMap(plan.mapName()));
+
             if (mapContainer.getIndexes().getIndex(plan.indexName()) != null) {
                 throw QueryException.error("Can't create index: index '" + plan.indexName() + "' already exists");
             }
@@ -131,8 +146,16 @@ public class PlanExecutor {
 
         if (plan.indexType().equals(IndexType.BITMAP)) {
             Map<String, String> options = plan.options();
+
             String uniqueKey = options.get(UNIQUE_KEY);
+            if (uniqueKey == null) {
+                uniqueKey = DEFAULT_UNIQUE_KEY;
+            }
+
             String uniqueKeyTransform = options.get(UNIQUE_KEY_TRANSFORMATION);
+            if (uniqueKeyTransform == null) {
+                uniqueKeyTransform = DEFAULT_UNIQUE_KEY_TRANSFORMATION;
+            }
 
             BitmapIndexOptions bitmapIndexOptions = new BitmapIndexOptions();
             bitmapIndexOptions.setUniqueKey(uniqueKey);
@@ -141,8 +164,8 @@ public class PlanExecutor {
             indexConfig.setBitmapIndexOptions(bitmapIndexOptions);
         }
 
-        // The `addIndex()` call does nothing, if an index with the same name already exists. Even if its config
-        // is different.
+        // The `addIndex()` call does nothing, if an index with the same name already exists.
+        // Even if its config is different.
         hazelcastInstance.getMap(plan.mapName()).addIndex(indexConfig);
 
         return UpdateSqlResultImpl.createUpdateCountResult(0);
@@ -228,17 +251,58 @@ public class PlanExecutor {
         return UpdateSqlResultImpl.createUpdateCountResult(0);
     }
 
+    SqlResult execute(CreateViewPlan plan) {
+        OptimizerContext context = plan.context();
+        SqlNode sqlNode = context.parse(plan.viewQuery()).getNode();
+        RelNode relNode = context.convert(sqlNode).getRel();
+        List<RelDataTypeField> fieldList = relNode.getRowType().getFieldList();
+
+        List<String> fieldNames = new ArrayList<>();
+        List<QueryDataType> fieldTypes = new ArrayList<>();
+
+        for (RelDataTypeField field : fieldList) {
+            fieldNames.add(field.getName());
+            fieldTypes.add(toHazelcastType(field.getType()));
+        }
+
+        View view = new View(plan.viewName(), plan.viewQuery(), plan.isStream(), fieldNames, fieldTypes);
+
+        if (plan.isReplace()) {
+            View existingView = catalog.getView(plan.viewName());
+            if (existingView != null) {
+                checkViewNewRowType(existingView, view);
+            }
+        }
+
+        catalog.createView(view, plan.isReplace(), plan.ifNotExists());
+        return UpdateSqlResultImpl.createUpdateCountResult(0);
+    }
+
+    SqlResult execute(DropViewPlan plan) {
+        catalog.removeView(plan.viewName(), plan.isIfExists());
+        return UpdateSqlResultImpl.createUpdateCountResult(0);
+    }
+
     SqlResult execute(ShowStatementPlan plan) {
         Stream<String> rows;
-        if (plan.getShowTarget() == ShowStatementTarget.MAPPINGS) {
-            rows = catalog.getMappingNames().stream();
-        } else {
-            assert plan.getShowTarget() == ShowStatementTarget.JOBS;
-            NodeEngine nodeEngine = getNodeEngine(hazelcastInstance);
-            JetServiceBackend jetServiceBackend = nodeEngine.getService(JetServiceBackend.SERVICE_NAME);
-            rows = jetServiceBackend.getJobRepository().getJobRecords().stream()
-                    .map(record -> record.getConfig().getName())
-                    .filter(Objects::nonNull);
+
+        switch (plan.getShowTarget()) {
+            case MAPPINGS:
+                rows = catalog.getMappingNames().stream();
+                break;
+            case VIEWS:
+                rows = catalog.getViewNames().stream();
+                break;
+            case JOBS:
+                assert plan.getShowTarget() == ShowStatementTarget.JOBS;
+                NodeEngine nodeEngine = getNodeEngine(hazelcastInstance);
+                JetServiceBackend jetServiceBackend = nodeEngine.getService(JetServiceBackend.SERVICE_NAME);
+                rows = jetServiceBackend.getJobRepository().getJobRecords().stream()
+                        .map(record -> record.getConfig().getName())
+                        .filter(Objects::nonNull);
+                break;
+            default:
+                throw new AssertionError("Unsupported SHOW statement target.");
         }
         SqlRowMetadata metadata = new SqlRowMetadata(singletonList(new SqlColumnMetadata("name", VARCHAR, false)));
         InternalSerializationService serializationService = Util.getSerializationService(hazelcastInstance);
@@ -321,15 +385,15 @@ public class PlanExecutor {
     SqlResult execute(IMapSelectPlan plan, QueryId queryId, List<Object> arguments, long timeout) {
         List<Object> args = prepareArguments(plan.parameterMetadata(), arguments);
         InternalSerializationService serializationService = Util.getSerializationService(hazelcastInstance);
-        SimpleExpressionEvalContext evalContext = new SimpleExpressionEvalContext(args, serializationService);
+        ExpressionEvalContext evalContext = new ExpressionEvalContext(args, serializationService);
         Object key = plan.keyCondition().eval(EmptyRow.INSTANCE, evalContext);
-        CompletableFuture<Object[]> future = hazelcastInstance.getMap(plan.mapName())
+        CompletableFuture<JetSqlRow> future = hazelcastInstance.getMap(plan.mapName())
                 .getAsync(key)
                 .toCompletableFuture()
                 .thenApply(value -> plan.rowProjectorSupplier()
                         .get(evalContext, Extractors.newBuilder(serializationService).build())
                         .project(key, value));
-        Object[] row = await(future, timeout);
+        JetSqlRow row = await(future, timeout);
         return new SqlResultImpl(
                 queryId,
                 new StaticQueryResultProducerImpl(row),
@@ -341,8 +405,7 @@ public class PlanExecutor {
 
     SqlResult execute(IMapInsertPlan plan, List<Object> arguments, long timeout) {
         List<Object> args = prepareArguments(plan.parameterMetadata(), arguments);
-        SimpleExpressionEvalContext evalContext =
-                new SimpleExpressionEvalContext(args, Util.getSerializationService(hazelcastInstance));
+        ExpressionEvalContext evalContext = new ExpressionEvalContext(args, Util.getSerializationService(hazelcastInstance));
         List<Entry<Object, Object>> entries = plan.entriesFn().apply(evalContext);
         if (!entries.isEmpty()) {
             assert entries.size() == 1;
@@ -360,8 +423,7 @@ public class PlanExecutor {
 
     SqlResult execute(IMapSinkPlan plan, List<Object> arguments, long timeout) {
         List<Object> args = prepareArguments(plan.parameterMetadata(), arguments);
-        SimpleExpressionEvalContext evalContext =
-                new SimpleExpressionEvalContext(args, Util.getSerializationService(hazelcastInstance));
+        ExpressionEvalContext evalContext = new ExpressionEvalContext(args, Util.getSerializationService(hazelcastInstance));
         Map<Object, Object> entries = plan.entriesFn().apply(evalContext);
         CompletableFuture<Void> future = hazelcastInstance.getMap(plan.mapName())
                 .putAllAsync(entries)
@@ -372,8 +434,7 @@ public class PlanExecutor {
 
     SqlResult execute(IMapUpdatePlan plan, List<Object> arguments, long timeout) {
         List<Object> args = prepareArguments(plan.parameterMetadata(), arguments);
-        SimpleExpressionEvalContext evalContext =
-                new SimpleExpressionEvalContext(args, Util.getSerializationService(hazelcastInstance));
+        ExpressionEvalContext evalContext = new ExpressionEvalContext(args, Util.getSerializationService(hazelcastInstance));
         Object key = plan.keyCondition().eval(EmptyRow.INSTANCE, evalContext);
         CompletableFuture<Long> future = hazelcastInstance.getMap(plan.mapName())
                 .submitToKey(key, plan.updaterSupplier().get(arguments))
@@ -384,8 +445,7 @@ public class PlanExecutor {
 
     SqlResult execute(IMapDeletePlan plan, List<Object> arguments, long timeout) {
         List<Object> args = prepareArguments(plan.parameterMetadata(), arguments);
-        SimpleExpressionEvalContext evalContext =
-                new SimpleExpressionEvalContext(args, Util.getSerializationService(hazelcastInstance));
+        ExpressionEvalContext evalContext = new ExpressionEvalContext(args, Util.getSerializationService(hazelcastInstance));
         Object key = plan.keyCondition().eval(EmptyRow.INSTANCE, evalContext);
         CompletableFuture<Void> future = hazelcastInstance.getMap(plan.mapName())
                 .submitToKey(key, EntryRemovingProcessor.ENTRY_REMOVING_PROCESSOR)
@@ -418,6 +478,38 @@ public class PlanExecutor {
         }
 
         return arguments;
+    }
+
+    /**
+     * When a view is replaced, the new view must contain all the
+     * original columns with the same types. Adding new columns or
+     * reordering them is allowed.
+     * <p>
+     * This is an interim mitigation for
+     * https://github.com/hazelcast/hazelcast/issues/20032. It disallows
+     * incompatible changes when doing CREATE OR REPLACE VIEW, however
+     * incompatible changes are still possible with DROP VIEW followed
+     * by a CREATE VIEW.
+     */
+    private static void checkViewNewRowType(View original, View replacement) {
+        Map<String, QueryDataType> newTypes = new HashMap<>();
+        for (int i = 0; i < replacement.viewColumnNames().size(); i++) {
+            newTypes.put(replacement.viewColumnNames().get(i), replacement.viewColumnTypes().get(i));
+        }
+
+        // each original name must be present and have the same type
+        for (int i = 0; i < original.viewColumnNames().size(); i++) {
+            QueryDataType origType = original.viewColumnTypes().get(i);
+            String origName = original.viewColumnNames().get(i);
+            QueryDataType newType = newTypes.get(origName);
+            if (newType == null) {
+                throw QueryException.error("Can't replace view, the new view doesn't contain column '" + origName + "'");
+            }
+            if (newType.getTypeFamily() != origType.getTypeFamily()) {
+                throw QueryException.error("Can't replace view, the type for column '" + origName + "' changed from "
+                        + origType.getTypeFamily() + " to " + newType.getTypeFamily());
+            }
+        }
     }
 
     private static int findQueryExceptionCode(Throwable t) {
@@ -455,6 +547,6 @@ public class PlanExecutor {
         MapProxyImpl<K, V> mapProxy = (MapProxyImpl<K, V>) map;
         MapService mapService = mapProxy.getService();
         MapServiceContext mapServiceContext = mapService.getMapServiceContext();
-        return mapServiceContext.getMapContainers().get(map.getName());
+        return mapServiceContext.getMapContainer(map.getName());
     }
 }

@@ -26,8 +26,8 @@ import com.hazelcast.jet.sql.impl.opt.logical.FullScanLogicalRel;
 import com.hazelcast.jet.sql.impl.opt.physical.FullScanPhysicalRel;
 import com.hazelcast.jet.sql.impl.opt.physical.IndexScanMapPhysicalRel;
 import com.hazelcast.jet.sql.impl.schema.HazelcastTable;
-import com.hazelcast.jet.sql.impl.schema.MappingCatalog;
-import com.hazelcast.jet.sql.impl.schema.MappingStorage;
+import com.hazelcast.jet.sql.impl.schema.TableResolverImpl;
+import com.hazelcast.jet.sql.impl.schema.TablesStorage;
 import com.hazelcast.jet.sql.impl.support.expressions.ExpressionBiValue;
 import com.hazelcast.jet.sql.impl.support.expressions.ExpressionType;
 import com.hazelcast.map.IMap;
@@ -96,8 +96,7 @@ public class SqlIndexResolutionTest extends SqlIndexTestSupport {
 
     @BeforeClass
     public static void beforeClass() {
-        // TODO: https://github.com/hazelcast/hazelcast/issues/19285
-        initialize(1, null);
+        initialize(2, null);
     }
 
     @Test
@@ -178,9 +177,9 @@ public class SqlIndexResolutionTest extends SqlIndexTestSupport {
         String mapName = map.getName();
 
         NodeEngine nodeEngine = getNodeEngine(instance());
-        MappingStorage mappingStorage = new MappingStorage(nodeEngine);
+        TablesStorage tablesStorage = new TablesStorage(nodeEngine);
         SqlConnectorCache connectorCache = new SqlConnectorCache(nodeEngine);
-        TableResolver resolver = new MappingCatalog(nodeEngine, mappingStorage, connectorCache);
+        TableResolver resolver = new TableResolverImpl(nodeEngine, tablesStorage, connectorCache);
 
         for (Table table : resolver.getTables()) {
             if (table instanceof AbstractMapTable && ((AbstractMapTable) table).getMapName().equals(mapName)) {

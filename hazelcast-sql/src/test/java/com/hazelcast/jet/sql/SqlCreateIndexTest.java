@@ -96,12 +96,35 @@ public class SqlCreateIndexTest extends OptimizerTestSupport {
         assertThat(mapContainer(map).getIndexes().getIndex(MAP_NAME)).isNull();
 
         String indexName = SqlTestSupport.randomName();
+        String sql = "CREATE INDEX IF NOT EXISTS " + indexName + " ON " + MAP_NAME + " (__key) TYPE BITMAP; ";
+
+        instance().getSql().execute(sql);
+
+        assertThat(mapContainer(map).getIndexes().getIndex(indexName)).isNotNull();
+    }
+
+    @Test
+    public void when_bitmapIndexWithOptionCreated_then_succeeds() {
+        assertThat(mapContainer(map).getIndexes().getIndex(MAP_NAME)).isNull();
+
+        String indexName = SqlTestSupport.randomName();
         String sql = "CREATE INDEX IF NOT EXISTS " + indexName + " ON " + MAP_NAME + " (__key) TYPE BITMAP " +
                 "OPTIONS ('unique_key' = '__key' , 'unique_key_transformation' = 'OBJECT'); ";
 
         instance().getSql().execute(sql);
 
         assertThat(mapContainer(map).getIndexes().getIndex(indexName)).isNotNull();
+    }
+
+    @Test
+    public void when_indexCreatedWithEmptyMap_then_succeeds() {
+        String mapName = "map2";
+        String indexName = SqlTestSupport.randomName();
+        String sql = "CREATE INDEX IF NOT EXISTS " + indexName + " ON " + mapName + " (__key) TYPE SORTED";
+
+        instance().getSql().execute(sql);
+
+        assertThat(mapContainer(instance().getMap(mapName)).getIndexes().getIndex(indexName)).isNotNull();
     }
 
     @Test
@@ -160,21 +183,6 @@ public class SqlCreateIndexTest extends OptimizerTestSupport {
     }
 
     @Test
-    public void when_indexCreatedWithMissingOptions_then_throws() {
-        String sql1 = "CREATE INDEX IF NOT EXISTS idx ON " + MAP_NAME + " (__key) TYPE BITMAP " +
-                "OPTIONS ('unique_key' = '__key')";
-
-        assertThatThrownBy(() -> instance().getSql().execute(sql1))
-                .hasMessageContaining("Required option missing: unique_key_transformation");
-
-        String sql2 = "CREATE INDEX IF NOT EXISTS idx ON " + MAP_NAME + " (__key) TYPE BITMAP " +
-                "OPTIONS ('unique_key_transformation' = 'RAW')";
-
-        assertThatThrownBy(() -> instance().getSql().execute(sql2))
-                .hasMessageContaining("Required option missing: unique_key");
-    }
-
-    @Test
     public void when_hashOrSortedIndexCreatedWithOptions_then_throws() {
         String sql1 = "CREATE INDEX IF NOT EXISTS idx ON " + MAP_NAME + " (this) TYPE HASH OPTIONS ('a' = '1')";
         assertThatThrownBy(() -> instance().getSql().execute(sql1))
@@ -185,21 +193,18 @@ public class SqlCreateIndexTest extends OptimizerTestSupport {
                 .hasMessageContaining("Unknown option for SORTED index: a");
     }
 
-    @Test
-    public void when_bitmapIndexCreatedWithoutOptions_then_throws() {
-        String sql = "CREATE INDEX IF NOT EXISTS idx ON " + MAP_NAME + " (this) TYPE BITMAP";
-        assertThatThrownBy(() -> instance().getSql().execute(sql))
-                .hasMessageContaining("BITMAP index requires unique_key and unique_key_transformation options");
+    private void checkPlan(boolean withIndex, boolean sorted, String sql) {
+        checkPlan(withIndex, sorted, sql, MAP_NAME);
     }
 
-    private void checkPlan(boolean withIndex, boolean sorted, String sql) {
+    private void checkPlan(boolean withIndex, boolean sorted, String sql, String mapName) {
         List<QueryDataType> parameterTypes = asList(QueryDataType.INT, QueryDataType.INT);
         List<TableField> mapTableFields = asList(
                 new MapTableField("__key", QueryDataType.INT, false, QueryPath.KEY_PATH),
                 new MapTableField("this", QueryDataType.INT, false, QueryPath.VALUE_PATH)
         );
         HazelcastTable table = partitionedTable(
-                MAP_NAME,
+                mapName,
                 mapTableFields,
                 getPartitionedMapIndexes(mapContainer(map), mapTableFields),
                 map.size()

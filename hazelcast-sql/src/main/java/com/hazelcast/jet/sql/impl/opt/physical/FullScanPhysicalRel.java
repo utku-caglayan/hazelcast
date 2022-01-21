@@ -22,6 +22,7 @@ import com.hazelcast.jet.core.Vertex;
 import com.hazelcast.jet.sql.impl.connector.SqlConnector;
 import com.hazelcast.jet.sql.impl.opt.OptUtils;
 import com.hazelcast.jet.sql.impl.opt.cost.CostUtils;
+import com.hazelcast.jet.sql.impl.processors.JetSqlRow;
 import com.hazelcast.jet.sql.impl.schema.HazelcastTable;
 import com.hazelcast.sql.impl.QueryParameterMetadata;
 import com.hazelcast.sql.impl.expression.Expression;
@@ -53,13 +54,13 @@ import static com.hazelcast.jet.sql.impl.opt.cost.CostUtils.TABLE_SCAN_CPU_MULTI
 
 public class FullScanPhysicalRel extends TableScan implements PhysicalRel {
 
-    private final FunctionEx<ExpressionEvalContext, EventTimePolicy<Object[]>> eventTimePolicyProvider;
+    private final FunctionEx<ExpressionEvalContext, EventTimePolicy<JetSqlRow>> eventTimePolicyProvider;
 
     FullScanPhysicalRel(
             RelOptCluster cluster,
             RelTraitSet traitSet,
             RelOptTable table,
-            @Nullable FunctionEx<ExpressionEvalContext, EventTimePolicy<Object[]>> eventTimePolicyProvider
+            @Nullable FunctionEx<ExpressionEvalContext, EventTimePolicy<JetSqlRow>> eventTimePolicyProvider
 
     ) {
         super(cluster, traitSet, table);
@@ -92,7 +93,7 @@ public class FullScanPhysicalRel extends TableScan implements PhysicalRel {
     }
 
     @Nullable
-    public FunctionEx<ExpressionEvalContext, EventTimePolicy<Object[]>> eventTimePolicyProvider() {
+    public FunctionEx<ExpressionEvalContext, EventTimePolicy<JetSqlRow>> eventTimePolicyProvider() {
         return eventTimePolicyProvider;
     }
 

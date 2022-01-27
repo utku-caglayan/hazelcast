@@ -20,6 +20,7 @@ import com.hazelcast.function.FunctionEx;
 import com.hazelcast.jet.core.EventTimePolicy;
 import com.hazelcast.jet.core.Vertex;
 import com.hazelcast.jet.sql.impl.connector.SqlConnector;
+import com.hazelcast.jet.sql.impl.opt.FullScan;
 import com.hazelcast.jet.sql.impl.opt.OptUtils;
 import com.hazelcast.jet.sql.impl.opt.cost.CostUtils;
 import com.hazelcast.jet.sql.impl.processors.JetSqlRow;
@@ -36,8 +37,6 @@ import org.apache.calcite.plan.RelOptPlanner;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelNode;
-import org.apache.calcite.rel.RelWriter;
-import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.metadata.RelMdUtil;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rel.type.RelDataType;
@@ -52,20 +51,17 @@ import static com.hazelcast.jet.impl.util.Util.toList;
 import static com.hazelcast.jet.sql.impl.connector.SqlConnectorUtil.getJetSqlConnector;
 import static com.hazelcast.jet.sql.impl.opt.cost.CostUtils.TABLE_SCAN_CPU_MULTIPLIER;
 
-public class FullScanPhysicalRel extends TableScan implements PhysicalRel {
-
-    private final FunctionEx<ExpressionEvalContext, EventTimePolicy<JetSqlRow>> eventTimePolicyProvider;
+public class FullScanPhysicalRel extends FullScan implements PhysicalRel {
 
     FullScanPhysicalRel(
             RelOptCluster cluster,
             RelTraitSet traitSet,
             RelOptTable table,
-            @Nullable FunctionEx<ExpressionEvalContext, EventTimePolicy<JetSqlRow>> eventTimePolicyProvider
+            @Nullable FunctionEx<ExpressionEvalContext, EventTimePolicy<JetSqlRow>> eventTimePolicyProvider,
+            int watermarkedColumnIndex
 
     ) {
-        super(cluster, traitSet, table);
-
-        this.eventTimePolicyProvider = eventTimePolicyProvider;
+        super(cluster, traitSet, table, eventTimePolicyProvider, watermarkedColumnIndex);
     }
 
     public Expression<Boolean> filter(QueryParameterMetadata parameterMetadata) {
@@ -90,11 +86,6 @@ public class FullScanPhysicalRel extends TableScan implements PhysicalRel {
         }
 
         return project(schema, projection, parameterMetadata);
-    }
-
-    @Nullable
-    public FunctionEx<ExpressionEvalContext, EventTimePolicy<JetSqlRow>> eventTimePolicyProvider() {
-        return eventTimePolicyProvider;
     }
 
     @Override
@@ -169,6 +160,7 @@ public class FullScanPhysicalRel extends TableScan implements PhysicalRel {
 
     @Override
     public RelNode copy(RelTraitSet traitSet, List<RelNode> inputs) {
-        return new FullScanPhysicalRel(getCluster(), traitSet, getTable(), eventTimePolicyProvider);
+        return new FullScanPhysicalRel(getCluster(), traitSet, getTable(), eventTimePolicyProvider(),
+                watermarkedColumnIndex());
     }
 }

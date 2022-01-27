@@ -153,12 +153,6 @@ public class FullScanPhysicalRel extends FullScan implements PhysicalRel {
     }
 
     @Override
-    public RelWriter explainTerms(RelWriter pw) {
-        return super.explainTerms(pw)
-                .itemIf("eventTimePolicyProvider", eventTimePolicyProvider, eventTimePolicyProvider != null);
-    }
-
-    @Override
     public RelNode copy(RelTraitSet traitSet, List<RelNode> inputs) {
         return new FullScanPhysicalRel(getCluster(), traitSet, getTable(), eventTimePolicyProvider(),
                 watermarkedColumnIndex());

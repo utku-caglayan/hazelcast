@@ -74,7 +74,7 @@ public abstract class AbstractDistributedObject<S extends RemoteService> impleme
         }
     }
 
-    protected final Data toData(Object object) {
+    public final Data toData(Object object) {
         return getNodeEngine().toData(object);
     }
 

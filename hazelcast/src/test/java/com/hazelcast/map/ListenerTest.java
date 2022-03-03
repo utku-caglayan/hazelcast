@@ -26,9 +26,13 @@ import com.hazelcast.core.EntryEvent;
 import com.hazelcast.core.EntryListener;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.HazelcastInstanceAware;
+import com.hazelcast.internal.serialization.Data;
+import com.hazelcast.internal.serialization.SerializationService;
+import com.hazelcast.internal.util.HashUtil;
 import com.hazelcast.map.impl.MapListenerAdapter;
 import com.hazelcast.map.impl.MapService;
 import com.hazelcast.map.impl.event.MapPartitionEventData;
+import com.hazelcast.map.impl.proxy.MapProxyImpl;
 import com.hazelcast.map.listener.EntryAddedListener;
 import com.hazelcast.map.listener.EntryUpdatedListener;
 import com.hazelcast.map.listener.MapPartitionLostListener;
@@ -46,6 +50,8 @@ import com.hazelcast.test.HazelcastTestSupport;
 import com.hazelcast.test.TestHazelcastInstanceFactory;
 import com.hazelcast.test.annotation.ParallelJVMTest;
 import com.hazelcast.test.annotation.QuickTest;
+import jnr.ffi.annotations.In;
+import org.jcodings.util.Hash;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -53,10 +59,7 @@ import org.junit.runner.RunWith;
 
 import java.io.IOException;
 import java.io.Serializable;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CountDownLatch;
@@ -64,6 +67,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import static com.hazelcast.test.Accessors.getNode;
 import static org.junit.Assert.assertEquals;
@@ -208,6 +212,49 @@ public class ListenerTest extends HazelcastTestSupport {
         int k = 1;
         putDummyData(map2, k);
         checkCountWithExpected(k * 3, k, k * 2);
+    }
+
+    @Test
+    public void entryOrderPerPartitionTest() {
+        // init cluster and map
+        Config config = getConfig();
+        String name = randomString();
+        TestHazelcastInstanceFactory nodeFactory = createHazelcastInstanceFactory(1);
+        HazelcastInstance instance = nodeFactory.newHazelcastInstance(config);
+        MapProxyImpl<Integer, String> map = (MapProxyImpl)instance.getMap(name);
+        Map<Integer, List<Integer>> eventOrder = new HashMap<>();
+        for (int i = 0; i < 271; i++) {
+            eventOrder.put(i, new LinkedList<>());
+        }
+        // configure event listener
+        int eventCount = 1000;
+        final CountDownLatch countLatch = new CountDownLatch(eventCount);
+        map.addEntryListener( new EntryAdapter<Integer, String>() {
+            @Override
+            public void entryAdded(EntryEvent<Integer, String> event) {
+                Integer key = event.getKey();
+                Data data = map.toData(key);
+                int partitionID = HashUtil.hashToIndex(data.getPartitionHash(), 271);
+                eventOrder.get(partitionID).add(key);
+                countLatch.countDown();
+            }
+        }, false);
+        // insert entries
+        for (int i = 0; i < eventCount; i++) {
+            map.put(i, "test");
+        }
+        // wait for handlers to be finished
+        try {
+            countLatch.await();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        // iterate and assert
+        for (Map.Entry<Integer,List<Integer>> entry : eventOrder.entrySet()) {
+            List<Integer> l = entry.getValue();
+            System.out.println(l);
+            assertEquals(l.stream().sorted().collect(Collectors.toList()), l);
+        }
     }
 
     /**
